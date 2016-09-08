@@ -78,6 +78,24 @@ NetCloud.prototype.login = function (
     }
 };
 
+NetCloud.prototype.inviteCollaborator = function(onSuccess, onFail, args) {
+    var myself = this;
+
+    this.reconnect(
+        function () {
+            myself.callService(
+                'inviteCollaborator',
+                onSuccess,
+                onFail,
+                args
+            );
+        },
+        function(err) {
+            myself.ide.showMessage(err, 2);
+        }
+    );
+};
+
 NetCloud.prototype.cloneRole = function(onSuccess, onFail, args) {
     var myself = this;
 

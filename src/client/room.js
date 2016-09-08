@@ -361,6 +361,21 @@ RoomMorph.prototype.deleteRole = function(role) {
     );
 };
 
+RoomMorph.prototype.inviteCollaborator = function(role) {
+    var myself = this;
+    console.log('inviting collaborator');
+    SnapCloud.inviteCollaborator(function(response) {
+            var newRole = Object.keys(response[0])[0];
+            myself.ide.showMessage('cloned ' + role + ' to ' +
+                newRole + ' !');
+        },
+        function (err, lbl) {
+            myself.ide.cloudError().call(null, err, lbl);
+        },
+        [role, myself.ide.sockets.uuid]
+    );
+};
+
 RoomMorph.prototype.createRoleClone = function(role) {
     var myself = this;
     SnapCloud.cloneRole(function(response) {
@@ -870,6 +885,8 @@ function EditRoleMorph(room, role) {
         // Check that the role name isn't the currently occupied role name
         if (role.name !== this.room.role()) {
             this.addButton('evictUser', 'Evict User');
+        } else {
+            this.addButton('inviteCollaborator', 'Collaborate');
         }
     } else {  // vacant
         this.addButton('moveToRole', 'Move to');
@@ -892,6 +909,11 @@ EditRoleMorph.prototype.inviteUser = function() {
 
 EditRoleMorph.prototype.editRoleName = function() {
     this.room.editRoleName(this.role.name);
+    this.destroy();
+};
+
+EditRoleMorph.prototype.inviteCollaborator = function() {
+    this.room.inviteCollaborator(this.role.name);
     this.destroy();
 };
 

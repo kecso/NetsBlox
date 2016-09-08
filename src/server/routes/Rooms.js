@@ -121,6 +121,55 @@ module.exports = [
             }
         }
     },
+    // TODO: Add endpoint for collaboration invitations
+    {
+        Service: 'inviteCollaborator',
+        Parameters: 'socketId,invitee,ownerId,roomName,roleId',
+        middleware: ['hasSocket', 'isLoggedIn'],
+        Method: 'post',
+        Note: '',
+        Handler: function(req, res) {
+            // Require:
+            //  inviter
+            //  invitee
+            //  roomId
+            //  roleId
+            var inviter = req.session.username,
+                invitee = req.body.invitee,
+                roomName = req.body.roomName,
+                roomId = utils.uuid(req.body.ownerId, roomName),
+                roleId = req.body.roleId,
+                inviteId = [inviter, invitee, roomId, roleId].join('-'),
+                inviteeSockets = this.socketsFor(invitee);
+
+            log(`${inviter} is inviting ${invitee} to ${roleId} at ${roomId}`);
+
+            // Record the invitation
+            invites[inviteId] = {
+                room: roomId,
+                role: roleId,
+                invitee
+            };
+
+            // If the user is online, send the invitation via ws to the browser
+            inviteeSockets
+                .filter(socket => socket.uuid !== req.body.socketId)
+                .forEach(socket => {
+                    // Send the invite to the sockets
+                    var msg = {
+                        type: 'room-invitation',
+                        id: inviteId,
+                        roomName: roomName,
+                        room: roomId,
+                        inviter,
+                        role: roleId
+                    };
+                    socket.send(msg);
+                }
+            );
+            res.send('ok');
+        }
+    },
     {
         Service: 'inviteToRoom',
         Parameters: 'socketId,invitee,ownerId,roomName,roleId',
