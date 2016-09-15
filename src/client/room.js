@@ -178,7 +178,7 @@ RoomMorph.prototype.showOwnerName = function(center) {
          this.ownerLabel.destroy();
      }
     
-     if (this.ownerId && !this.ownerId.startsWith('_client_')) {
+     if (this.ownerId && this.ownerId.indexOf('_client_') !== 0) {
          this.ownerLabel = new StringMorph('Owner: ' + this.ownerId, false, false, true);
  
          this.ownerLabel.setCenter(center);
