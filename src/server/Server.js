@@ -27,8 +27,6 @@ var express = require('express'),
     Logger = require('./logger'),
 
     // Session and cookie info
-    sessionSecret = process.env.SESSION_SECRET || 'DoNotUseThisInProduction',
-    expressSession = require('express-session'),
     cookieParser = require('cookie-parser');
 
 var BASE_CLASSES = [
@@ -68,17 +66,23 @@ Server.prototype.configureRoutes = function() {
 
     // Session & Cookie settings
     this.app.use(cookieParser());
-    this.app.use(expressSession({secret: sessionSecret}));
 
     // CORS
     this.app.use(function(req, res, next) {
-      res.header("Access-Control-Allow-Origin", "*");
-      res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
-      next();
+        var origin = req.get('origin'),
+            validOrigins = /^(https?:\/\/(?:.+\.)?netsblox\.org(?::\d{1,5})?)$/;
+
+        if (validOrigins.test(origin) || process.env.ENV === 'local-dev') {
+            res.header("Access-Control-Allow-Origin", origin);
+            res.header('Access-Control-Allow-Credentials', true);
+        }
+        res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+        next();
     });
 
     // Add routes
     this.app.use('/rpc', this.rpcManager.router);
+    createRouter.init(this._logger);
     this.app.use('/api', createRouter.call(this));
 
     // Initial page
@@ -95,14 +99,14 @@ Server.prototype.start = function(done) {
             return done(err);
         }
         self.configureRoutes();
-        self._server = self.app.listen(self.opts.port, function() {
+        self._server = self.app.listen(self.opts.port, function(err) {
             console.log('listening on port ' + self.opts.port);
             SocketManager.prototype.start.call(self, {server: self._server});
             // Enable Vantage
             if (self.opts.vantage) {
                 new Vantage(self).start(self.opts.vantagePort);
             }
-            done();
+            done(err);
         });
     });
 };

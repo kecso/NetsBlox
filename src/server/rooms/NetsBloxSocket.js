@@ -3,10 +3,19 @@
  */
 'use strict';
 var counter = 0,
+    generate = require('project-name-generator'),
     CONSTANTS = require(__dirname + '/../../common/Constants'),
-    PROJECT_FIELDS = ['ProjectName', 'SourceCode', 'Media', 'SourceSize', 'MediaSize', 'RoomUuid'],
+    PROJECT_FIELDS = [
+        'ProjectName',
+        'SourceCode',
+        'Media',
+        'SourceSize',
+        'MediaSize',
+        'RoomUuid'
+    ],
     R = require('ramda'),
     parseXml = require('xml2js').parseString,
+    assert = require('assert'),
     CONDENSED_MSGS = ['project-response', 'import-room'];
 
 var createSaveableProject = function(json, callback) {
@@ -22,8 +31,9 @@ var createSaveableProject = function(json, callback) {
         if (err) {
             return callback(err);
         }
+
         inProjectSource.forEach(field => {
-            project[field] = jsonSrc[field.toLowerCase()];
+            project[field] = jsonSrc.project[field.toLowerCase()];
         });
         callback(null, project);
     });
@@ -117,7 +127,49 @@ class NetsBloxSocket {
 
         this._room = room;
         this._room.add(this, role);
+        this._logger.trace(`${this.username} joined ${room.uuid} at ${role}`);
         this.roleId = role;
+    }
+
+    getNewName (name) {
+        if (this.user) {
+            var nameExists = {};
+            this.user.rooms.forEach(room => nameExists[room.name] = true);
+
+            if (name) {
+                var i = 2,
+                    basename = name;
+
+                do {
+                    name = `${basename} (${i++})`;
+                } while (nameExists[name]);
+
+            } else {
+                // Create base name
+                do {
+                    name = generate().spaced;
+                } while (nameExists[name]);
+            }
+
+        } else {
+            name = 'New Room ' + (Date.now() % 100);
+        }
+
+        this._logger.info(`generated unique name for ${this.username} - ${name}`);
+        return name;
+    }
+
+    newRoom (opts) {
+        var name,
+            room;
+
+        opts = opts || {role: 'myRole'};
+        name = opts.room || opts.name || this.getNewName();
+        this._logger.info(`"${this.username}" is making a new room "${name}"`);
+
+        room = this.createRoom(this, name);
+        room.createRole(opts.role);
+        this.join(room, opts.role);
     }
 
     // This should only be called internally *EXCEPT* when the socket is going to close
@@ -135,10 +187,15 @@ class NetsBloxSocket {
     changeSeats (role) {
         this._logger.log(`changing to role ${this._room.uuid}/${role} from ${this.roleId}`);
         this._room.move({socket: this, dst: role});
+        assert.equal(this.roleId, role);
+    }
+
+    sendToOthers (msg) {
+        this._room.sendFrom(this, msg);
     }
 
     sendToEveryone (msg) {
-        this._room.sendFrom(this, msg);
+        this._room.sendToEveryone(this, msg);
     }
 
     send (msg) {
@@ -175,7 +232,7 @@ NetsBloxSocket.MessageHandlers = {
     'beat': function() {},
 
     'message': function(msg) {
-        this.sendToEveryone(msg);
+        msg.dstId === 'others in room' ? this.sendToOthers(msg) : this.sendToEveryone(msg);
     },
 
     'project-response': function(msg) {
@@ -218,9 +275,7 @@ NetsBloxSocket.MessageHandlers = {
     },
 
     'create-room': function(msg) {
-        var room = this.createRoom(this, msg.room);
-        room.createRole(msg.role);
-        this.join(room, msg.role);
+        this.newRoom(msg);
     },
 
     'join-room': function(msg) {
@@ -230,9 +285,16 @@ NetsBloxSocket.MessageHandlers = {
 
         this.getRoom(owner, name, (room) => {
             if (!room) {
-                this._logger.error(`Could not join room ${name}`);
+                this._logger.error(`Could not join room ${name} - doesn't exist!`);
                 return;
             }
+            // Check if the user is already at the room
+            if (this._room === room) {
+                this._logger.warn(`${this.username} is already in ${name}! ` +
+                    ` Switching roles instead of "join-room" for ${room.uuid}`);
+                return this.changeSeats(role);
+            }
+
             // create the role if need be (and if we are the owner)
             if (!room.roles.hasOwnProperty(role) && room.owner === this) {
                 this._logger.info(`creating role ${role} at ${room.uuid}`);
@@ -271,6 +333,7 @@ NetsBloxSocket.MessageHandlers = {
         name = msg.name;
         while (names[name]) {
             name = msg.name + ' (' + i + ')';
+            i++;
         }
 
         this._logger.trace(`changing room name from ${this._room.name} to ${name}`);
@@ -314,6 +377,16 @@ NetsBloxSocket.MessageHandlers = {
                 });
             });
         }
+    },
+
+    'request-new-name': function() {
+        // get unique base name
+        this._room.name = false;
+        this._room.changeName();
+    },
+     
+    'share-msg-type': function(msg) {
+        this.sendToEveryone(msg);
     }
 };
 

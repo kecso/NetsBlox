@@ -11,10 +11,8 @@ var R = require('ramda'),
 class ActiveRoom {
 
     constructor(logger, name, owner) {
-        var uuid = utils.uuid(owner.username, name);
         this.name = name;
-        this._logger = logger.fork('ActiveRoom:' + uuid);
-        this.uuid = uuid;
+        this.originTime = Date.now();
 
         // Seats
         this.roles = {};  // actual occupants
@@ -28,6 +26,8 @@ class ActiveRoom {
         // Saving
         this._store = null;
 
+        this.uuid = utils.uuid(owner.username, name);
+        this._logger = logger.fork('ActiveRoom:' + this.uuid);
         this._logger.log('created!');
     }
 
@@ -46,8 +46,12 @@ class ActiveRoom {
             data;
 
         // Clone the room storage data
-        data = this._store.fork(fork);
-        fork.setStorage(data);
+        if (this._store) {
+            data = this._store.fork(fork);
+            fork.setStorage(data);
+        } else {
+            this._logger.error('ERROR: no store defined for room "' + this.name + '"');
+        }
 
         roles.forEach(role => fork.silentCreateRole(role));
 
@@ -68,6 +72,7 @@ class ActiveRoom {
     add (socket, role) {
         this._logger.trace(`adding ${socket.uuid} to ${role}`);
         this.roles[role] = socket;
+        socket.roleId = role;
         this.onRolesChanged();  // Update all clients
     }
 
@@ -93,15 +98,52 @@ class ActiveRoom {
         this._store = store;
     }
 
+    changeName(name) {
+        if (!name) {
+            // Get name unique to the owner
+            name = this.owner.getNewName(this.name);
+        }
+        this.update(name);
+        return name;
+    }
+
     save() {
         // TODO: Remove this fn
     }
 
     move (params) {
         var src = params.src || params.socket.roleId,
-            socket = this.roles[src],
+            socket = params.socket,
             dst = params.dst;
 
+        if (socket) {
+            // socket should equal this.roles[src]!
+            if (socket !== this.roles[src]) {
+                var rolesList = Object.keys(this.roles)
+                    .map(role => `${role}: ${this.roles[role] && this.roles[role].username}`)
+                    .join('\n');
+
+                this._logger.error(`room "${this.name}" is out of sync! ${src} should have ` +
+                    `${socket.username} but has ${this.roles[src] && this.roles[src].username}` +
+                    `.\nPrinting all roles: ${rolesList}`);
+
+                if (this.roles[src]) {  // notify the socket of it's removal!
+                    var currSocket = this.roles[src];
+                    currSocket.newRoom();
+                    this._logger.error(`Moved ${this.roles[src].username} from ${this.name} (${src})` +
+                        ` to ${currSocket._room.name} (${currSocket.roleId})`);
+
+                    // Send message to currSocket to explain the move
+                    currSocket.send({
+                        type: 'notification',
+                        message: `${socket.username} has taken your spot.\nYou have been moved ` +
+                            ` to a new project.`
+                    });
+                }
+            }
+        }
+
+        socket = socket || this.roles[src];
         this._logger.info(`moving from ${src} to ${dst}`);
         this.roles[src] = null;
         this.add(socket, dst);
@@ -114,6 +156,11 @@ class ActiveRoom {
             .forEach(socket => socket.send(msg));
     }
 
+    // Send to everyone, including the origin socket
+    sendToEveryone (socket, msg) {
+         this.sockets().forEach(socket => socket.send(msg));
+     }
+ 
     sockets () {
         return R.values(this.roles)
             .filter(socket => !!socket);
@@ -143,9 +190,9 @@ class ActiveRoom {
         var oldUuid = this.uuid;
         this.name = name || this.name;
         this.uuid = utils.uuid(this.owner.username, this.name);
-        this._logger.trace('Updating uuid to ' + this.uuid);
 
         if (this.uuid !== oldUuid) {
+            this._logger.trace('Updating uuid to ' + this.uuid);
             this.onUuidChange(oldUuid);
         }
         if (name) {
@@ -260,6 +307,7 @@ class ActiveRoom {
             callback(null, content);
         });
     }
+
 }
 
 // Factory method
@@ -268,6 +316,7 @@ ActiveRoom.fromStore = function(logger, socket, data) {
 
     // Store the data
     room.setStorage(data);
+    room.originTime = data.originTime;
 
     // Set up the roles
     room._uuid = data.uuid;  // save over the old uuid even if it changes

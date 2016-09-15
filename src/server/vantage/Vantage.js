@@ -5,6 +5,7 @@ var vantage = require('vantage')(),
     chalk = require('chalk'),
     repl = require('vantage-repl'),
     R = require('ramda'),
+    fs = require('fs'),
     banner,
     CONNECTED_STATE = [
         'CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'
@@ -26,37 +27,91 @@ var NetsBloxVantage = function(server) {
 
     // get user info
     vantage
-        .command('user <username>', 'Get info about a specific user')
+        .command('user [username]', 'Get info about a specific user')
         .option('-r, --rooms', 'Get the user\'s saved rooms')
+        .option('-a, --admin', 'Toggle admin status')
         .option('-u, --update', 'Update the user\'s schema')
         .option('-c, --clear', 'Clear the room info')
+        .option('-e [project]', 'Save user project to file')
         .alias('u')
-        .action( (args, cb) => {
+        .action((args, cb) => {
             var username = args.username;
-            server.storage.users.get(username, function(err, user) {
-                if (err) {
-                    return cb(err);
-                }
-                if (!user) {
-                    console.log('user does not exist!');
+
+            if (!username) {  // print all usernames
+                console.log('All known users:');
+                server.storage.users.names()
+                    .then(names => console.log(names.sort()
+                        // Should not have multiple counts for a user!
+                        .reduce((counts, name) => {
+                            var pair = counts[0];
+                            if (pair && pair[0] === name) {
+                                pair[1]++;
+                            } else {
+                                counts.unshift([name, 1]);
+                            }
+                            return counts;
+                        }, [])
+                        .map(pair => pair[0] + (pair[1] > 1 ? ` (${pair[1]})` : ''))
+                        .join('\n')))
+                    .then(cb);
+            } else {
+                server.storage.users.get(username, function(err, user) {
+                    if (err) {
+                        return cb(err);
+                    }
+                    if (!user) {
+                        console.log('user does not exist!');
+                        return cb();
+                    }
+                    if (args.options.rooms) {
+                        console.log(user.pretty().rooms);
+                    } else if (args.options.e) {
+                        var name = args.options.e,
+                            room = user.rooms.find(room => room.name === name),
+                            saveable;
+
+                        if (room) {
+                            saveable = `<room name="${name}">` +
+                                // Create role/project info
+                                Object.keys(room.roles).map(role => [
+                                    `<role name="${role}">`,
+                                    room.roles[role].SourceCode || '',
+                                    room.roles[role].Media || '',
+                                    `</role>`
+                                ].join('\n')) +
+                                `</room>`;
+
+                            fs.writeFile(name + '.xml', saveable, err => {
+                                if (err) {
+                                    return cb(err);
+                                }
+                                console.log(`saved ${name} to ${name}.xml`);
+                                cb();
+                            });
+                        } else {
+                            console.log(`Could not find room "${name}"`);
+                        }
+
+                    } else if (args.options.update) {
+                        user.rooms = user.rooms || user.projects || [];
+                        delete user.projects;
+                        user.save();
+                        console.log('User updated!');
+                    } else if (args.options.clear) {
+                        user.rooms = [];
+                        user.save();
+                        console.log('User updated!');
+                    } else if (args.options.admin) {
+                        user.admin = !user.admin;
+                        user.save();
+                        console.log(`User "${user.username}" ${user.admin ? 'now has' :
+                            'no longer has'} admin priviledges!`);
+                    } else {
+                        console.log(user.pretty());
+                    }
                     cb();
-                }
-                if (args.options.rooms) {
-                    console.log(user.pretty().rooms);
-                } else if (args.options.update) {
-                    user.rooms = user.rooms || user.rooms || [];
-                    delete user.projects;
-                    user.save();
-                    console.log('User updated!');
-                } else if (args.options.clear) {
-                    user.rooms = [];
-                    user.save();
-                    console.log('User updated!');
-                } else {
-                    console.log(user.pretty());
-                }
-                cb();
-            });
+                });
+            }
         });
 
     // set DEBUG level FIXME

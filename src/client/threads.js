@@ -5,6 +5,7 @@ ThreadManager.prototype.startProcess = function (
     exportResult,
     callback,
     isClicked,
+    rightAway,
     context
 ) {
     var active = this.findProcess(block),
@@ -17,13 +18,16 @@ ThreadManager.prototype.startProcess = function (
         active.stop();
         this.removeTerminatedProcesses();
     }
-    newProc = new NetsProcess(block.topBlock(), callback, context);
+    newProc = new NetsProcess(block.topBlock(), callback, rightAway, context);
     newProc.exportResult = exportResult;
     newProc.isClicked = isClicked || false;
     if (!newProc.homeContext.receiver.isClone) {
         top.addHighlight();
     }
     this.processes.push(newProc);
+    if (rightAway) {
+        newProc.runStep();
+    }
     return newProc;
 };
 
@@ -33,7 +37,7 @@ NetsProcess.prototype.constructor = NetsProcess;
 NetsProcess.prototype.timeout = 500; // msecs after which to force yield
 NetsProcess.prototype.isCatchingErrors = true;
 
-function NetsProcess(topBlock, onComplete, context) {
+function NetsProcess(topBlock, onComplete, rightAway, context) {
     this.topBlock = topBlock || null;
 
     this.readyToYield = false;
@@ -45,9 +49,11 @@ function NetsProcess(topBlock, onComplete, context) {
     this.context = null;
     this.homeContext = context || new Context();
     this.lastYield = Date.now();
+    this.isFirstStep = true;
     this.isAtomic = false;
     this.prompter = null;
     this.httpRequest = null;
+    this.rpcRequest = null;
     this.isPaused = false;
     this.pauseOffset = null;
     this.frameCount = 0;
@@ -64,7 +70,9 @@ function NetsProcess(topBlock, onComplete, context) {
             topBlock.blockSequence(),
             this.homeContext
         );
-        this.pushContext('doYield'); // highlight top block
+        if (!rightAway) {
+            this.pushContext('doYield'); // highlight top block
+        }
     }
 }
 
@@ -139,14 +147,30 @@ NetsProcess.prototype.createRPCUrl = function (rpc, params) {
     return window.location.origin + '/rpc/'+rpc+'?uuid='+uuid+'&'+params;
 };
 
-NetsProcess.prototype.callRPC = function (rpc, params) {
-    var url = this.createRPCUrl(rpc, params).replace(/http[s]?:\/\//, '');
-    return this.reportURL(url);
+NetsProcess.prototype.callRPC = function (rpc, params, noCache) {
+    var url = this.createRPCUrl(rpc, params),
+        response;
+
+    if (noCache) {
+        url += '&t=' + Date.now();
+    }
+
+    if (!this.rpcRequest) {
+        this.rpcRequest = new XMLHttpRequest();
+        this.rpcRequest.open('GET', url, true);
+        this.rpcRequest.send(null);
+    } else if (this.rpcRequest.readyState === 4) {
+        response = this.rpcRequest.responseText;
+        this.rpcRequest = null;
+        return response;
+    }
+    this.pushContext('doYield');
+    this.pushContext();
 };
 
 // TODO: Consider moving these next two functions to the Stage
 NetsProcess.prototype.getJSFromRPC = function (rpc, params) {
-    var result = this.callRPC(rpc, params);
+    var result = this.callRPC(rpc, params, true);
     if (result) {
         try {  // Try to convert it to JSON
             result = JSON.parse(result);
@@ -164,11 +188,12 @@ NetsProcess.prototype.getJSFromRPCDropdown = function (rpc, action, params) {
     return this.getJSFromRPC(['', rpc, action].join('/'), params);
 };
 
-NetsProcess.prototype.getCostumeFromRPC = function (rpc, params) {
+NetsProcess.prototype.getCostumeFromRPC = function (rpc, action, params) {
     var image,
         stage = this.homeContext.receiver.parentThatIsA(StageMorph),
         paramItems = params.length ? params.split('&') : [];
         
+    rpc = ['', rpc, action].join('/');
     // Add the width and height of the stage as default params
     if (params.indexOf('width') === -1) {
         paramItems.push('width=' + stage.width());

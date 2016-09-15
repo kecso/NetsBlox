@@ -5,7 +5,12 @@ var R = require('ramda'),
     UserAPI = require('./Users'),
     RoomAPI = require('./Rooms'),
     ProjectAPI = require('./Projects'),
-    EXTERNAL_API = R.map(R.partial(R.omit,['Handler']), UserAPI.concat(ProjectAPI).concat(RoomAPI)),
+    EXTERNAL_API = UserAPI
+        .concat(ProjectAPI)
+        .concat(RoomAPI)
+        .filter(api => api.Service)
+        .map(R.omit.bind(R, 'Handler'))
+        .map(R.omit.bind(R, 'middleware')),
     GameTypes = require('../GameTypes'),
 
     debug = require('debug'),
@@ -13,6 +18,8 @@ var R = require('ramda'),
     fs = require('fs'),
     path = require('path'),
     EXAMPLES = require('../examples'),
+    middleware = require('./middleware'),
+    saveLogin = middleware.saveLogin,
 
     // PATHS
     PATHS = [
@@ -109,13 +116,14 @@ module.exports = [
         }
     },
     { 
-        Method: 'get', 
+        Method: 'post',  // post would make more sense...
         URL: 'SignUp',
         Handler: function(req, res) {
-            log('Sign up request:', req.query.Username, req.query.Email);
+            log('Sign up request:', req.body.Username, req.body.Email);
             var self = this,
-                uname = req.query.Username,
-                email = req.query.Email;
+                uname = req.body.Username,
+                password = req.body.Password,
+                email = req.body.Email;
 
             // Must have an email and username
             if (!email || !uname) {
@@ -126,6 +134,7 @@ module.exports = [
             self.storage.users.get(uname, function(e, user) {
                 if (!user) {
                     var newUser = self.storage.users.new(uname, email);
+                    newUser.hash = password || null;
                     newUser.save();
                     return res.send('User Created!');
                 }
@@ -135,30 +144,90 @@ module.exports = [
         }
     },
     { 
+        Method: 'post',
+        URL: 'SignUp/validate',
+        Handler: function(req, res) {
+            log('Signup/validate request:', req.body.Username, req.body.Email);
+            var self = this,
+                uname = req.body.Username,
+                password = req.body.Password,
+                email = req.body.Email;
+
+            // Must have an email and username
+            if (!email || !uname) {
+                log('Invalid request to /SignUp/validate');
+                return res.status(400).send('ERROR: need both username and email!');
+            }
+
+            self.storage.users.get(uname, function(e, user) {
+                if (!user) {
+                    return res.send('Valid User Signup Request!');
+                }
+                log('User "'+uname+'" already exists.');
+                return res.status(401).send('ERROR: user exists');
+            });
+        }
+    },
+    { 
         Method: 'post', 
         URL: '',  // login/SignUp method
         Handler: function(req, res) {
             var hash = req.body.__h,
+                isUsingCookie = !req.body.__u,
                 socket;
 
-            this.storage.users.get(req.body.__u, (e, user) => {
-                if (e) {
-                    log('Could not find user "'+req.body.__u+'": ' +e);
-                    return res.status(500).send('ERROR: ' + e);
+            // Should check if the user has a valid cookie. If so, log them in with it!
+            middleware.tryLogIn(req, res, (err, loggedIn) => {
+                let username = req.body.__u || req.session.username;
+                if (err) {
+                    return res.status(500).send(err);
                 }
-                if (user && user.hash === hash) {  // Sign in 
-                    req.session.username = req.body.__u;
-                    log('"'+req.session.username+'" has logged in.');
-                    // Associate the websocket with the username
-                    socket = this.sockets[req.body.__sId];
-                    if (socket) {  // websocket has already connected
-                        socket.onLogin(user);
-                    }
-                    return res.send(Utils.serializeArray(EXTERNAL_API));
-                }
-                log('Could not find user "'+req.body.__u+'"');
 
-                return res.sendStatus(403);
+                if (!username) {
+                    log(`"passive" login failed - no session found!`);
+                    return res.sendStatus(403);
+                }
+
+                // Explicit login
+                log(`Logging in as ${username}`);
+                this.storage.users.get(username, (e, user) => {
+                    if (e) {
+                        log(`Could not find user "${username}": ${e}`);
+                        return res.status(500).send('ERROR: ' + e);
+                    }
+
+                    if (user && (loggedIn || user.hash === hash)) {  // Sign in 
+                        if (!isUsingCookie) {
+                            saveLogin(res, user, req.body.remember);
+                        }
+
+                        log(`"${user.username}" has logged in.`);
+
+                        // Associate the websocket with the username
+                        socket = this.sockets[req.body.socketId];
+                        if (socket) {  // websocket has already connected
+                            socket.onLogin(user);
+                        }
+
+                        if (req.body.return_user) {
+                            return res.status(200).json({
+                                username: username,
+                                admin: user.admin,
+                                email: user.email,
+                                api: req.body.api ? Utils.serializeArray(EXTERNAL_API) : null
+                            });
+                        } else {
+                            return res.status(200).send(Utils.serializeArray(EXTERNAL_API));
+                        }
+                    } else {
+                        if (user) {
+                            log(`Incorrect password attempt for ${user.username}`);
+                            return res.status(403).send(`Incorrect password`);
+                        }
+                        log(`Could not find user "${username}"`);
+                        return res.status(403).send(`Could not find user "${username}"`);
+                    }
+                });
             });
         }
     },
@@ -186,16 +255,13 @@ module.exports = [
     {
         Method: 'get',
         URL: 'Examples/:name',
+        middleware: ['hasSocket'],
         Handler: function(req, res) {
             var name = req.params.name,
-                uuid = req.query.sId,
+                uuid = req.query.socketId,
                 isPreview = req.query.preview,
                 socket,
                 example;
-
-            if (!uuid) {
-                return res.status(400).send('ERROR: No socket id provided');
-            }
 
             if (!EXAMPLES.hasOwnProperty(name)) {
                 this._logger.warn(`ERROR: Could not find example "${name}`);

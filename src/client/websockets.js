@@ -1,5 +1,4 @@
-/*globals nop, SnapCloud, Context, SpriteMorph, StageMorph,
-  RoomMorph*/
+/*globals nop, SnapCloud, Context, SpriteMorph, StageMorph*/
 // WebSocket Manager
 
 var WebSocketManager = function (ide) {
@@ -8,9 +7,16 @@ var WebSocketManager = function (ide) {
     this.websocket = null;
     this.messages = [];
     this.processes = [];  // Queued processes to start
-    this.url = window.location.origin.replace('http://','ws://');
+    this._protocol = window.location.protocol === 'https:' ?
+        'wss:' : 'ws:';
+    this.url = this._protocol + '//' + window.location.host;
     this._connectWebSocket();
     this._heartbeat();
+    this.version = Date.now();
+
+    this.errored = false;
+    this.hasConnected = false;
+    this.connected = false;
 };
 
 WebSocketManager.HEARTBEAT_INTERVAL = 55*1000;  // 55 seconds
@@ -29,7 +35,7 @@ WebSocketManager.MessageHandlers = {
             content = msg.content;
 
         // filter for gameplay
-        if (dstId === this.ide.projectName || dstId === 'everyone') {
+        if (dstId === this.ide.projectName || dstId === 'others in room' || dstId === 'everyone in room') {
             this.onMessageReceived(messageType, content, 'role');
         }
         // TODO: pass to debugger
@@ -87,6 +93,61 @@ WebSocketManager.MessageHandlers = {
         if (msg.roleId === this.ide.projectName) {  // role name and project name are the same
             this.ide.silentSetProjectName(msg.name);
         }
+    },
+
+    'notification': function(msg) {
+        this.ide.showMessage(msg.message);
+    },
+
+    'share-msg-type': function(msg) {
+        // only share with intended role
+        if (this.ide.projectName === msg.roleId) {
+            var myself = this,
+                dialog = new DialogBoxMorph();
+            // reject duplicates
+            if (this.ide.stage.messageTypes.msgTypes[msg.name]) {
+                this.ide.showMessage(msg.from + ' tried sending you message type \'' + msg.name + '\' when you already have it!', 2);
+            } else {
+                // Prepare dialog & prompt user
+                var request = 
+                    msg.from + ' requested to send you a message type:\n\'' +
+                    msg.name + '\' with ' + 
+                    msg.fields.length + 
+                    (msg.fields.length !== 1 ? ' fields.' : ' field.') + '\n' +
+                    'Would you like to accept?';
+
+                dialog.askYesNo('Message Share Request', request, myself.ide.root());
+                
+                // Accept the request
+                dialog.ok = function() {
+                    var ide = myself.ide.root().children[0].parentThatIsA(IDE_Morph);
+                    myself.ide.stage.addMessageType({name: msg.name, fields: msg.fields});
+                    ide.flushBlocksCache('services');  //  b/c of inheritance
+                    ide.refreshPalette();
+
+                    // format fields
+                    var fields = [];
+                    for (var i = 0; i < msg.fields.length; i++) {
+                        fields.push(' ' + '\'' + msg.fields[i] + '\'');
+                    }
+
+                    // format notification
+                    var notification = 'Received message type \'' + msg.name + '\' with ' + msg.fields.length + 
+                        (msg.fields.length === 0 ? ' fields.' : (msg.fields.length === 1 ? ' field: ' + msg.fields : ' fields: ' + msg.fields));
+
+                    // notify
+                    this.destroy();
+                    var acceptDialog = new DialogBoxMorph();
+                    myself.ide.showMessage(notification, 2);
+
+                    // refresh message palette
+                    ide.room.parentThatIsA(ProjectsMorph).updateRoom();
+                    if (ide && ide.currentTab === 'room') {
+                        ide.spriteBar.tabBar.tabTo('room');
+                    }
+                };
+            }
+        }
     }
 };
 
@@ -110,7 +171,12 @@ WebSocketManager.prototype._connectWebSocket = function() {
     // Set up message firing queue
     this.websocket.onopen = function() {
         console.log('Connection established');  // REMOVE this
-        //self._onConnect();
+        if (self.errored === true) {
+            self.ide.showMessage((self.hasConnected ? 're' : '') + 'connected!', 2);
+            self.errored = false;
+        }
+        self.hasConnected = true;
+        self.connected = true;
 
         while (self.messages.length) {
             self.websocket.send(self.messages.shift());
@@ -131,6 +197,25 @@ WebSocketManager.prototype._connectWebSocket = function() {
     };
 
     this.websocket.onclose = function() {
+        var errMsg;
+
+        if (self.connected) {
+            self.version = Date.now();
+            self.connected = false;
+        }
+
+        if (!self.errored && Date.now() - self.version > 5000) {  // tried connecting for 5 seconds
+            errMsg = self.hasConnected ? 
+                'Temporarily disconnected.\nSome network functionality may be ' +
+                'nonfunctional.\nTrying to reconnect...' :
+
+                'Could not fully connect to NetsBlox.\nPlease try refreshing ' +
+                'your browser or try a different browser';
+
+            self.ide.showMessage(errMsg);
+            self.errored = true;
+        }
+
         setTimeout(self._connectWebSocket.bind(self), 500);
     };
 };
@@ -155,6 +240,7 @@ WebSocketManager.prototype._onConnect = function() {
         var updateRoom = this.updateRoomInfo.bind(this);
         SnapCloud.reconnect(updateRoom, updateRoom);
     } else {
+        SnapCloud.passiveLogin(this.ide);
         this.updateRoomInfo();
     }
 };
@@ -267,6 +353,7 @@ WebSocketManager.prototype.startProcesses = function () {
                 null,
                 null,
                 null,
+                false,
                 process.context
             );
             if (!this.processes[i].length) {

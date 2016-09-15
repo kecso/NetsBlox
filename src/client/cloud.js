@@ -1,18 +1,25 @@
-/* global Cloud, localize, nop, IDE_Morph, */
-var SnapCloud = new Cloud('http://'+window.location.host+'/api/');
+/* global localize, nop, IDE_Morph, */
+NetCloud.prototype = new Cloud();
 
-Cloud.prototype.login = function (
+function NetCloud(url) {
+    Cloud.call(this, url);
+    this.onLogin = nop;
+}
+
+NetCloud.prototype.login = function (
     username,
     password,
+    remember,
     callBack,
     errorCall
 ) {
     // both callBack and errorCall are two-argument functions
     var request = new XMLHttpRequest(),
         usr = JSON.stringify({
-            '__h': password,
-            '__u': username,
-            '__sId': this.socketId()
+            __h: password,
+            __u: username,
+            remember: remember,
+            socketId: this.socketId()
         }),
         myself = this;
     this.setRoute(username);
@@ -41,7 +48,8 @@ Cloud.prototype.login = function (
                     if (myself.api.logout) {
                         myself.username = username;
                         myself.password = password;
-                        callBack.call(null, myself.api, 'Snap!Cloud');
+                        myself.onLogin();
+                        callBack.call(null, myself.api, 'NetsBlox Cloud');
                     } else {
                         errorCall.call(
                             null,
@@ -53,7 +61,7 @@ Cloud.prototype.login = function (
                     errorCall.call(
                         null,
                         '',
-                        localize('wrong username or password')
+                        localize(request.responseText || 'wrong username or password')
                     );
                 } else {
                     errorCall.call(
@@ -66,11 +74,11 @@ Cloud.prototype.login = function (
         };
         request.send(usr);
     } catch (err) {
-        errorCall.call(this, err.toString(), 'Snap!Cloud');
+        errorCall.call(this, err.toString(), 'NetsBlox Cloud');
     }
 };
 
-Cloud.prototype.cloneRole = function(onSuccess, onFail, args) {
+NetCloud.prototype.cloneRole = function(onSuccess, onFail, args) {
     var myself = this;
 
     this.reconnect(
@@ -88,8 +96,9 @@ Cloud.prototype.cloneRole = function(onSuccess, onFail, args) {
     );
 };
 
-Cloud.prototype.moveToRole = function(onSuccess, onFail, args) {
+NetCloud.prototype.moveToRole = function(onSuccess, onFail, args) {
     var myself = this;
+    args.push(this.socketId());
 
     this.reconnect(
         function () {
@@ -106,7 +115,7 @@ Cloud.prototype.moveToRole = function(onSuccess, onFail, args) {
     );
 };
 
-Cloud.prototype.invitationResponse = function (id, accepted, onSuccess, onFail) {
+NetCloud.prototype.invitationResponse = function (id, accepted, onSuccess, onFail) {
     var myself = this,
         args = [id, accepted, this.socketId()];
 
@@ -125,7 +134,7 @@ Cloud.prototype.invitationResponse = function (id, accepted, onSuccess, onFail) 
     );
 };
 
-Cloud.prototype.inviteToRoom = function () {
+NetCloud.prototype.inviteToRoom = function () {
     var myself = this,
         args = arguments;
 
@@ -133,7 +142,7 @@ Cloud.prototype.inviteToRoom = function () {
         function () {
             myself.callService(
                 'inviteToRoom',
-                myself.disconnect.bind(myself),
+                nop,
                 nop,
                 args
             );
@@ -142,7 +151,7 @@ Cloud.prototype.inviteToRoom = function () {
     );
 };
 
-Cloud.prototype.getFriendList = function (callBack, errorCall) {
+NetCloud.prototype.getFriendList = function (callBack, errorCall) {
     var myself = this;
     this.reconnect(
         function () {
@@ -151,7 +160,6 @@ Cloud.prototype.getFriendList = function (callBack, errorCall) {
                 function (response, url) {
                     var ids = Object.keys(response[0] || {});
                     callBack.call(null, ids, url);
-                    myself.disconnect();
                 },
                 errorCall
             );
@@ -160,7 +168,7 @@ Cloud.prototype.getFriendList = function (callBack, errorCall) {
     );
 };
 
-Cloud.prototype.deleteRole = function(onSuccess, onFail, args) {
+NetCloud.prototype.deleteRole = function(onSuccess, onFail, args) {
     var myself = this;
     this.reconnect(
         function () {
@@ -168,7 +176,6 @@ Cloud.prototype.deleteRole = function(onSuccess, onFail, args) {
                 'deleteRole',
                 function () {
                     onSuccess.call(null);
-                    myself.disconnect();
                 },
                 onFail,
                 args
@@ -178,16 +185,13 @@ Cloud.prototype.deleteRole = function(onSuccess, onFail, args) {
     );
 };
 
-Cloud.prototype.evictUser = function(onSuccess, onFail, args) {
+NetCloud.prototype.evictUser = function(onSuccess, onFail, args) {
     var myself = this;
     this.reconnect(
         function () {
             myself.callService(
                 'evictUser',
-                function () {
-                    onSuccess.call(null);
-                    myself.disconnect();
-                },
+                onSuccess.bind(null),
                 onFail,
                 args
             );
@@ -196,15 +200,19 @@ Cloud.prototype.evictUser = function(onSuccess, onFail, args) {
     );
 };
 
-Cloud.prototype.socketId = function () {
-    var ide = world.children.find(function(child) {  // FIXME
+NetCloud.prototype.socketId = function () {
+    var ide;
+    ide = detect(
+        world.children,  // FIXME: Don't depend on the 'world' variable
+        function(child) {
             return child instanceof IDE_Morph;
-        });
+        }
+    );
     return ide.sockets.uuid;
 };
 
 // Override
-Cloud.prototype.saveProject = function (ide, callBack, errorCall) {
+NetCloud.prototype.saveProject = function (ide, callBack, errorCall) {
     var myself = this;
     myself.reconnect(
         function () {
@@ -212,7 +220,6 @@ Cloud.prototype.saveProject = function (ide, callBack, errorCall) {
                 'saveProject',
                 function (response, url) {
                     callBack.call(null, response, url);
-                    myself.disconnect();
                 },
                 errorCall,
                 [
@@ -225,7 +232,7 @@ Cloud.prototype.saveProject = function (ide, callBack, errorCall) {
 };
 
 // FIXME: I shouldn't have to override this...
-Cloud.prototype.callService = function (
+NetCloud.prototype.callService = function (
     serviceName,
     callBack,
     errorCall,
@@ -295,3 +302,136 @@ Cloud.prototype.callService = function (
     }
 };
 
+NetCloud.prototype.passiveLogin = function (ide, callback) {
+    // Try to login w/ cookie only
+    var request = new XMLHttpRequest(),
+        socketId = this.socketId(),
+        usr = JSON.stringify({
+            return_user: true,
+            api: true,
+            socketId: socketId
+        }),
+        myself = this,
+        response;
+
+    callback = callback || nop;
+    try {
+        request.open(
+            'POST',
+            (this.hasProtocol() ? '' : 'http://') +
+                this.url,
+            true
+        );
+        request.setRequestHeader(
+            'Content-Type',
+            'application/json; charset=utf-8'
+        );
+        // glue this session to a route:
+        request.withCredentials = true;
+        request.onreadystatechange = function () {
+            if (request.readyState === 4) {
+                if (request.status === 200) {
+                    response = JSON.parse(request.responseText);
+                    myself.api = myself.parseAPI(response.api);
+                    myself.username = response.username;
+                    myself.session = true;
+                    myself.password = true;
+                    if (ide) {
+                        ide.source = 'cloud';
+                    }
+                    myself.onPassiveLogin();
+                    callback();
+                }
+            }
+        };
+        request.send(usr);
+    } catch (err) {
+        console.error(err.toString());
+    }
+    
+};
+
+NetCloud.prototype.reconnect = function (callback, errorCall) {
+    if (this.password === true) {  // if using session cookie, don't login then back out
+        this.passiveLogin(null, callback);
+    } else {
+        if (!(this.username && this.password)) {
+            this.message('You are not logged in');
+            return;
+        }
+        this.login(
+            this.username,
+            this.password,
+            undefined,
+            callback,
+            errorCall
+        );
+    }
+};
+
+NetCloud.prototype.disconnect = nop;
+
+NetCloud.prototype.logout = function (callBack, errorCall) {
+    this.callService(
+        'logout',
+        callBack,
+        errorCall
+    );
+    this.clear();
+};
+
+NetCloud.prototype.signup = function (
+    username,
+    email,
+    callBack,
+    errorCall
+) {
+    // both callBack and errorCall are two-argument functions
+    var request = new XMLHttpRequest(),
+        myself = this,
+        data = 'Username=' + encodeURIComponent(username) + '&Email=' +
+            encodeURIComponent(email);
+    try {
+        request.open(
+            'POST',
+            (this.hasProtocol() ? '' : 'http://')
+                + this.url + 'SignUp',
+            true
+        );
+        request.setRequestHeader(
+            "Content-Type",
+            "application/x-www-form-urlencoded"
+        );
+        request.withCredentials = true;
+        request.onreadystatechange = function () {
+            if (request.readyState === 4) {
+                if (request.responseText) {
+                    if (request.responseText.indexOf('ERROR') === 0) {
+                        errorCall.call(
+                            this,
+                            request.responseText,
+                            'Signup'
+                        );
+                    } else {
+                        callBack.call(
+                            null,
+                            request.responseText,
+                            'Signup'
+                        );
+                    }
+                } else {
+                    errorCall.call(
+                        null,
+                        myself.url + 'SignUp',
+                        localize('could not connect to:')
+                    );
+                }
+            }
+        };
+        request.send(data);
+    } catch (err) {
+        errorCall.call(this, err.toString(), 'NetsBlox Cloud');
+    }
+};
+
+var SnapCloud = new NetCloud(window.location.protocol + '//' + window.location.host+'/api/');

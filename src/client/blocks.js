@@ -7,6 +7,53 @@
    SymbolMorph, MorphicPreferences, contains, IDE_Morph, Costume
    */
 
+BlockMorph.prototype.setSpec = function (spec, silently) {
+    var myself = this,
+        part,
+        inputIdx = -1;
+
+    if (!spec) {return; }
+    this.parts().forEach(function (part) {
+        part.destroy();
+    });
+    if (this.isPrototype) {
+        this.add(this.placeHolder());
+    }
+    this.parseSpec(spec).forEach(function (word) {
+        if (word[0] === '%') {
+            inputIdx += 1;
+        }
+        part = myself.labelPart(word);
+        myself.add(part);
+        if (!(part instanceof CommandSlotMorph ||
+                part instanceof StringMorph)) {
+            part.drawNew();
+        }
+        if (part instanceof RingMorph) {
+            part.fixBlockColor();
+        }
+        if (part instanceof MultiArgMorph ||
+                part.constructor === CommandSlotMorph ||
+                part.constructor === RingCommandSlotMorph) {
+            part.fixLayout();
+        }
+        if (myself.isPrototype) {
+            myself.add(myself.placeHolder());
+        }
+        // NetsBlox addition: start
+        if (part instanceof InputSlotMorph && !part.choices && myself.definition) {
+        // NetsBlox addition: end
+            part.setChoices.apply(
+                part,
+                myself.definition.inputOptionsOfIdx(inputIdx)
+            );
+        }
+    });
+    this.blockSpec = spec;
+    this.fixLayout(silently);
+    this.cachedInputs = null;
+};
+
 InputSlotMorph.prototype.messageTypesMenu = function() {
     var rcvr = this.parentThatIsA(BlockMorph).receiver(),
         stage = rcvr.parentThatIsA(StageMorph),
@@ -28,7 +75,6 @@ MultiArgMorph.prototype.addHintInput = function (text) {
     this.fixLayout();
 };
 
-// TODO: Refactor
 SyntaxElementMorph.prototype.labelPart = function (spec) {
     var part, tokens;
     if (spec[0] === '%' &&
@@ -61,7 +107,6 @@ SyntaxElementMorph.prototype.labelPart = function (spec) {
             return part;
         }
         // Netsblox addition (end)
-
         // single-arg and specialized multi-arg slots:
         switch (spec) {
         case '%imgsource':
@@ -83,6 +128,10 @@ SyntaxElementMorph.prototype.labelPart = function (spec) {
             break;
         case '%scriptVars':
             part = new MultiArgMorph('%t', null, 1, spec);
+            part.canBeEmpty = false;
+            break;
+        case '%blockVars':
+            part = new MultiArgMorph('%t', 'block variables', 0, spec);
             part.canBeEmpty = false;
             break;
         case '%parms':
@@ -154,7 +203,8 @@ SyntaxElementMorph.prototype.labelPart = function (spec) {
             part.isUnevaluated = true;
             break;
         case '%txt':
-            part = new InputSlotMorph();
+            part = new InputSlotMorph(); // supports whitespace dots
+            // part = new TextSlotMorph(); // multi-line, no whitespace dots
             part.minWidth = part.height() * 1.7; // "landscape"
             part.fixLayout();
             break;
@@ -237,6 +287,7 @@ SyntaxElementMorph.prototype.labelPart = function (spec) {
                 },
                 true // read-only
             );
+            part.isStatic = true;
             break;
         case '%dates':
             part = new InputSlotMorph(
@@ -327,6 +378,15 @@ SyntaxElementMorph.prototype.labelPart = function (spec) {
                 true
             );
             break;
+        case '%get': // sprites, parts, speciment, clones
+            part = new InputSlotMorph(
+                null,
+                false,
+                'gettablesMenu',
+                true
+            );
+            part.isStatic = true;
+            break;
         case '%cst':
             part = new InputSlotMorph(
                 null,
@@ -339,13 +399,19 @@ SyntaxElementMorph.prototype.labelPart = function (spec) {
             part = new InputSlotMorph(
                 null,
                 false,
-                {   brightness : ['brightness'],
-                    ghost : ['ghost'],
+                {   color: ['color'],
+                    fisheye: ['fisheye'],
+                    whirl: ['whirl'],
+                    pixelate: ['pixelate'],
+                    mosaic: ['mosaic'],
+                    duplicate: ['duplicate'],
                     negative : ['negative'],
                     comic: ['comic'],
-                    duplicate: ['duplicate'],
-                    confetti: ['confetti']
-                    },
+                    confetti: ['confetti'],
+                    saturation: ['saturation'],
+                    brightness : ['brightness'],
+                    ghost: ['ghost']
+                },
                 true
             );
             part.setContents(['ghost']);
@@ -363,6 +429,7 @@ SyntaxElementMorph.prototype.labelPart = function (spec) {
                 null,
                 false,
                 {
+                    'any key' : ['any key'],
                     'up arrow': ['up arrow'],
                     'down arrow': ['down arrow'],
                     'right arrow': ['right arrow'],
@@ -418,6 +485,14 @@ SyntaxElementMorph.prototype.labelPart = function (spec) {
             part.isStatic = true;
             break;
         // Netsblox addition
+        case '%msgType':
+            part = new InputSlotMorph(
+                null,
+                false,
+                'messageTypes',
+                true
+            );
+            break;
         case '%msgOutput':
             part = new MessageOutputSlotMorph();
             break;
@@ -549,17 +624,7 @@ SyntaxElementMorph.prototype.labelPart = function (spec) {
             part = new InputSlotMorph(
                 null,
                 false,
-                {
-                    number : ['number'],
-                    text : ['text'],
-                    Boolean : ['Boolean'],
-                    list : ['list'],
-                    command : ['command'],
-                    reporter : ['reporter'],
-                    predicate : ['predicate']
-                    // ring : 'ring'
-                    // object : 'object'
-                },
+                'typesMenu',
                 true
             );
             part.setContents(['number']);
@@ -610,8 +675,15 @@ SyntaxElementMorph.prototype.labelPart = function (spec) {
             part = new ArgMorph('list');
             break;
         case '%b':
+            part = new BooleanSlotMorph();
+            break;
         case '%boolUE':
-            part = new BooleanSlotMorph(null, true);
+            part = new BooleanSlotMorph();
+            part.isUnevaluated = true;
+            break;
+        case '%bool':
+            part = new BooleanSlotMorph(true);
+            part.isStatic = true;
             break;
         case '%cmd':
             part = new CommandSlotMorph();
@@ -635,15 +707,17 @@ SyntaxElementMorph.prototype.labelPart = function (spec) {
         case '%cs':
             part = new CSlotMorph(); // non-static
             break;
+        case '%cl':
+            part = new CSlotMorph();
+            part.isStatic = true; // rejects reporter drops
+            part.isLambda = true; // auto-reifies nested script
+            break;
         case '%clr':
             part = new ColorSlotMorph();
             part.isStatic = true;
             break;
         case '%t':
             part = new TemplateSlotMorph('a');
-            break;
-        case '%message':
-            part = new TemplateSlotMorph('message');
             break;
         case '%upvar':
             part = new TemplateSlotMorph('\u2191'); // up-arrow
@@ -828,8 +902,20 @@ SyntaxElementMorph.prototype.labelPart = function (spec) {
     return part;
 };
 
+InputSlotMorph.prototype.messageTypes = function () {
+    var stage = this.parentThatIsA(IDE_Morph).stage,  // FIXME
+        msgTypes = stage.messageTypes.names();
+        dict = {};
+
+    for (var i = msgTypes.length; i--;) {
+        dict[msgTypes[i]] = msgTypes[i];
+    }
+
+    return dict;
+};
+
 InputSlotMorph.prototype.roleNames = function () {
-    var ide = this.parentThatIsA(IDE_Morph),
+    var ide = this.root().children[0],
         roles = Object.keys(ide.room.roles),
         dict = {};
 
@@ -839,7 +925,8 @@ InputSlotMorph.prototype.roleNames = function () {
         }
     }
 
-    dict['everyone'] = 'everyone';
+    dict['others in room'] = 'others in room';
+    dict['everyone in room'] = 'everyone in room';
     return dict;
 };
 

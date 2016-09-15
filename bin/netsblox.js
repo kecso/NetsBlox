@@ -1,11 +1,17 @@
 'use strict';
+var path = require('path');
+require('dotenv').load({path: path.join(__dirname, '..', '.env')});
+
 var express = require('express'),
     app = express(),
-    port = process.env.PORT || 8080,
-    vport = process.env.VANTAGE_PORT || 1234,
-    mongoURI = process.env.MONGO_URI || process.env.MONGOLAB_URI;
+    port,
+    vport,
+    mongoURI;
 
-require('dotenv').load();
+port = process.env.PORT || 8080;
+vport = process.env.VANTAGE_PORT || 1234;
+mongoURI = process.env.MONGO_URI || process.env.MONGOLAB_URI;
+
 app.use(express.static(__dirname + '/client/'));
 
 app.get('/', function(req, res) {
@@ -16,6 +22,7 @@ app.get('/', function(req, res) {
 var opts = {
         port: port,
         vantagePort: vport,
+        vantage: process.env.ENV !== 'production',
         mongoURI: mongoURI || 'mongodb://localhost:27017'
     };
 

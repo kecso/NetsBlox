@@ -16,6 +16,7 @@ var debug = require('debug'),
     geolib = require('geolib'),
     request = require('request'),
     baseUrl = 'http://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&',
+    Constants = require('../../../../common/Constants'),
     remainingMsgs = {};
 
 // Helpers
@@ -86,8 +87,17 @@ module.exports = {
         request(url, function(err, response, body) {
             if (err) {
                 res.status(500).send('ERROR: ' + err);
+                return;
             }
-            log('Found ' + JSON.parse(body).metadata.count + ' earthquakes');
+
+            try {
+                body = JSON.parse(body);
+            } catch (e) {
+                error('Received non-json: ' + body);
+                return res.status(500).send('ERROR: could not retrieve earthquakes');
+            }
+
+            log('Found ' + body.metadata.count + ' earthquakes');
             res.sendStatus(200);
 
             var earthquakes = [],
@@ -95,7 +105,7 @@ module.exports = {
                 msg;
 
             try {
-                earthquakes = JSON.parse(body).features;
+                earthquakes = body.features;
             } catch (e) {
                 log('Could not parse earthquakes (returning empty array): ' + e);
             }

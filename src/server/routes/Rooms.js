@@ -60,6 +60,7 @@ module.exports = [
         Parameters: '',
         Method: 'Get',
         Note: '',
+        middleware: ['isLoggedIn'],
         Handler: function(req, res) {
             var username = req.session.username,
                 uuids = Object.keys(this.sockets),
@@ -98,19 +99,20 @@ module.exports = [
             log(`roleId is ${roleId}`);
             log(`userId is ${userId}`);
             socket = room.roles[roleId];
+
             if (!socket) {  // user is not online
-                this._logger.info(`Removing role ${roleId}`);
-                // Remove the user from the room!
-                // TODO
+                this._logger.warn(`Cannot remove role ${roleId} - no associated socket!`);
                 return res.send('user has been evicted!');
             }
 
             if (socket.username === userId) {
                 // Remove the user from the room!
-                // TODO
-                // Fork the room
                 log(`${userId} is evicted from room ${roomId}`);
-                this.forkRoom({room, socket});
+                if (userId === ownerId) {  // removing another instance of self
+                    socket.newRoom();
+                } else {  // Fork the room
+                    this.forkRoom({room, socket});
+                }
                 room.onRolesChanged();
             } else {
                 var err = `${userId} is not at ${roleId} at room ${roomId}`;
@@ -122,6 +124,7 @@ module.exports = [
     {
         Service: 'inviteToRoom',
         Parameters: 'socketId,invitee,ownerId,roomName,roleId',
+        middleware: ['hasSocket', 'isLoggedIn'],
         Method: 'post',
         Note: '',
         Handler: function(req, res) {
@@ -169,6 +172,7 @@ module.exports = [
     {
         Service: 'invitationResponse',
         Parameters: 'inviteId,response,socketId',
+        middleware: ['hasSocket', 'isLoggedIn'],
         Method: 'post',
         Note: '',
         Handler: function(req, res) {
@@ -211,12 +215,13 @@ module.exports = [
         Parameters: 'roleId,ownerId,roomName',
         Method: 'post',
         Note: '',
+        middleware: ['isLoggedIn'],
         Handler: function(req, res) {
             var username = req.session.username,
                 roleId = req.body.roleId,
                 ownerId = req.body.ownerId,
                 roomName = req.body.roomName,
-                roomId = Utils.uuid(ownerId, roomName),
+                roomId = utils.uuid(ownerId, roomName),
                 room = this.rooms[roomId];
 
             //  Get the room
@@ -251,16 +256,23 @@ module.exports = [
     {
         Service: 'moveToRole',
         Parameters: 'dstId,roleId,ownerId,roomName,socketId',
+        middleware: ['hasSocket'],
         Method: 'post',
         Note: '',
         Handler: function(req, res) {
-            var socket = this.sockets[req.body.socketId],
+            var socketId = req.body.socketId;
+            var socket = this.sockets[socketId],
                 roleId = req.body.roleId,
                 dstId = req.body.dstId,
                 ownerId = req.body.ownerId,
                 roomName = req.body.roomName,
                 roomId = Utils.uuid(ownerId, roomName),
                 room = this.rooms[roomId];
+
+            if (!socket) {
+                this._logger.error('Could not find socket for ' + socketId);
+                return res.status(404).send('ERROR: Not fully connected... Please try again or try a different browser (and report this issue to the netsblox maintainers!)');
+            }
 
             if (!socket.isOwner()) {
                 return res.status(403).send('ERROR: permission denied');
@@ -287,6 +299,7 @@ module.exports = [
     {  // Create a new role and copy this project's blocks to it
         Service: 'cloneRole',
         Parameters: 'roleId,socketId',
+        middleware: ['hasSocket'],
         Method: 'post',
         Note: '',
         Handler: function(req, res) {

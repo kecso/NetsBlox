@@ -20,6 +20,12 @@ class UserStore {
         });
     }
 
+    names () {
+        return this._users.find().toArray()
+            .then(users => users.map(user => user.username))
+            .catch(e => this._logger.error('Could not get the user names!'));
+    }
+
     new(username, email) {
         return new User(this._logger, this._users, {username, email});
     }
@@ -37,6 +43,7 @@ class User extends DataWrapper {
                 room.roles = room.roles || room.seats;
                 delete room.seats;
             });
+
         super(db, data);
         this._logger = logger.fork(data.username);
     }

@@ -225,7 +225,7 @@ ProjectDialogMorph.prototype.setSource = function (source) {
                 myself.nameField.setContents(item.name || '');
             }
             src = JSON.parse(myself.ide.getURL(
-                'api/Examples/' + item.name + '?sId=' + myself.ide.sockets.uuid +
+                'api/Examples/' + item.name + '?socketId=' + myself.ide.sockets.uuid +
                 '&preview=true'
             )).src.SourceCode;
 
@@ -264,7 +264,7 @@ ProjectDialogMorph.prototype.openProject = function () {
 
     if (this.source === 'examples') {
         response = JSON.parse(this.ide.getURL('api/Examples/' + proj.name +
-            '?sId=' + this.ide.sockets.uuid));
+            '?socketId=' + this.ide.sockets.uuid));
         this.ide.room.nextRoom = {
             ownerId: response.ownerId,
             roomName: response.roomName,
@@ -295,7 +295,6 @@ ProjectDialogMorph.prototype.rawOpenCloudProject = function (proj) {
                 'getProject',
                 function (response) {
                     var roleId = response[0].ProjectName;  // src proj name
-                    SnapCloud.disconnect();
                     ide.source = 'cloud';
                     if (response[0].SourceCode) {
                         ide.droppedText(response[0].SourceCode);
@@ -346,12 +345,12 @@ ProjectDialogMorph.prototype.saveProject = function () {
                     ) + '\n"' + name + '"?',
                     'Replace Project',
                     function () {
-                        myself.ide.setProjectName(name);
+                        myself.ide.room.name = name;
                         myself.saveCloudProject();
                     }
                 );
             } else {
-                this.ide.setProjectName(name);
+                myself.ide.room.name = name;
                 myself.saveCloudProject();
             }
         } else { // 'local'
@@ -385,3 +384,58 @@ ProjectDialogMorph.prototype.saveProject = function () {
     }
 };
 
+////////////////////////////////////////////////////
+// Override submodule for exporting of message types
+////////////////////////////////////////////////////
+
+IDE_Morph.prototype.exportGlobalBlocks = function () {
+    if (this.stage.globalBlocks.length > 0 || this.stage.deletableMessageNames().length) {
+        new BlockExportDialogMorph(
+            this.serializer,
+            this.stage.globalBlocks,
+            this.stage
+        ).popUp(this.world());
+    } else {
+        this.inform(
+            'Export blocks/msg types',
+            'this project doesn\'t have any\n'
+                + 'custom global blocks or message types yet'
+        );
+    }
+};
+
+IDE_Morph.prototype.rawOpenBlocksString = function (str, name, silently) {
+    // name is optional (string), so is silently (bool)
+    var blocks,
+        myself = this;
+    if (Process.prototype.isCatchingErrors) {
+        try {
+            blocks = this.serializer.loadBlocks(str, myself.stage);
+        } catch (err) {
+            this.showMessage('Load failed: ' + err);
+        }
+    } else {
+        blocks = this.serializer.loadBlocks(str, myself.stage);
+    }
+    if (silently) {
+        blocks.forEach(function (def) {
+            // Message type import
+            if (def.category === 'msg') {
+                myself.stage.addMessageType(JSON.parse(def.spec));
+            } else {  // Block import
+                def.receiver = myself.stage;
+                myself.stage.globalBlocks.push(def);
+                myself.stage.replaceDoubleDefinitionsFor(def);
+            }
+        });
+        this.flushBlocksCache();
+        this.flushPaletteCache();
+        this.refreshPalette();
+        this.showMessage(
+            'Imported Blocks / Message Types Module' + (name ? ': ' + name : '') + '.',
+            2
+        );
+    } else {
+        new BlockImportDialogMorph(blocks, this.stage, name).popUp();
+    }
+};

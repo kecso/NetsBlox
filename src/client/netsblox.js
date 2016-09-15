@@ -59,24 +59,17 @@ NetsBloxMorph.prototype.clearProject = function () {
 
 
 NetsBloxMorph.prototype.newProject = function (projectName) {
-    var roomName = 'Room ' + (Date.now() % 100);
     this.clearProject();
 
     // Get new room name
     this.sockets.sendMessage({
         type: 'create-room',
-        room: roomName,
         role: projectName || RoomMorph.DEFAULT_ROLE
     });
-    if (projectName) {
-        this.setProjectName(projectName || '');
-    } else {
-        this.silentSetProjectName(RoomMorph.DEFAULT_ROLE);
-    }
+
+    this.silentSetProjectName(projectName || RoomMorph.DEFAULT_ROLE);
     this.createRoom();
-    this.room.name = roomName;
     this.selectSprite(this.stage.children[0]);
-    this.controlBar.updateLabel();
 };
 
 NetsBloxMorph.prototype.createRoom = function() {
@@ -159,8 +152,7 @@ NetsBloxMorph.prototype.loadNextRoom = function () {
     }
 };
 
-NetsBloxMorph.prototype.rawOpenCloudDataString = function (str) {
-    var model;
+NetsBloxMorph.prototype.rawOpenCloudDataString = function (model, parsed) {
     StageMorph.prototype.hiddenPrimitives = {};
     StageMorph.prototype.codeMappings = {};
     StageMorph.prototype.codeHeaders = {};
@@ -168,7 +160,7 @@ NetsBloxMorph.prototype.rawOpenCloudDataString = function (str) {
     StageMorph.prototype.enableInheritance = false;
     if (Process.prototype.isCatchingErrors) {
         try {
-            model = this.serializer.parse(str);
+            model = parsed ? model : this.serializer.parse(model);
             this.serializer.loadMediaModel(model.childNamed('media'));
             this.serializer.openProject(
                 this.serializer.loadProjectModel(
@@ -183,7 +175,7 @@ NetsBloxMorph.prototype.rawOpenCloudDataString = function (str) {
             this.showMessage('Load failed: ' + err);
         }
     } else {
-        model = this.serializer.parse(str);
+        model = parsed ? model : this.serializer.parse(model);
         this.serializer.loadMediaModel(model.childNamed('media'));
         this.serializer.openProject(
             this.serializer.loadProjectModel(
@@ -546,11 +538,11 @@ NetsBloxMorph.prototype.projectMenu = function () {
         shiftClicked ? new Color(100, 0, 0) : null
     );
 
-    if (this.stage.globalBlocks.length) {
+    if (this.stage.globalBlocks.length || this.stage.deletableMessageNames().length) {
         menu.addItem(
-            'Export blocks...',
+            'Export blocks/msgs...',
             function () {myself.exportGlobalBlocks(); },
-            'show global custom block definitions as XML' +
+            'show global custom block definitions/message types as XML' +
                 '\nin a new browser window'
         );
         menu.addItem(
@@ -773,50 +765,56 @@ NetsBloxMorph.prototype.exportRoom = function (roles) {
 
 // Open the room
 NetsBloxMorph.prototype.openRoomString = function (str) {
+    var room = this.serializer.parse(str),
+        roles = {},
+        role;
+
+    if (!room.children[0]) {
+        this.showMessage('Malformed room - No roles found.');
+        return;
+    }
+
+    room.children.forEach(function(role) {
+        roles[role.attributes.name] = {
+            SourceCode: role.children[0].toString(),
+            Media: role.children[1].toString()
+        };
+    });
+    role = room.children[0].attributes.name;
+
     this.showMessage('Opening room...', 3);
-
-    // Get the roomName and a role name from the str
-    var room = this.serializer.load(str),
-        role = Object.keys(room.roles)[0];
-
     // Create a room with the new name
     this.newProject(role);
 
     // Send 'import-room' message
     this.sockets.sendMessage({
         type: 'import-room',
-        name: room.name,
+        name: room.attributes.name,
         role: role,
-        roles: room.roles  // FIXME: This just contains the source
+        roles: roles
     });
 
     // load the given project
-    this.openProjectString(room.roles[role].SourceCode);
+    this.openCloudDataString(room.children[0], true);
 };
 
-NetsBloxMorph.prototype.droppedText = function (aString, name) {
-    var lbl = name ? name.split('.')[0] : '';
-    if (aString.indexOf('<room') === 0) {
-        location.hash = '';
-        return this.openRoomString(aString);
-    }
-    if (aString.indexOf('<project') === 0) {
-        location.hash = '';
-        return this.openProjectString(aString);
-    }
-    if (aString.indexOf('<snapdata') === 0) {
-        location.hash = '';
-        return this.openCloudDataString(aString);
-    }
-    if (aString.indexOf('<blocks') === 0) {
-        return this.openBlocksString(aString, lbl, true);
-    }
-    if (aString.indexOf('<sprites') === 0) {
-        return this.openSpritesString(aString);
-    }
-    if (aString.indexOf('<media') === 0) {
-        return this.openMediaString(aString);
-    }
+NetsBloxMorph.prototype.openCloudDataString = function (model, parsed) {
+    var msg,
+        myself = this,
+        str = parsed ? model : model.toString(),
+        size = Math.round(str.length / 1024);
+    this.nextSteps([
+        function () {
+            msg = myself.showMessage('Opening project\n' + size + ' KB...');
+        },
+        function () {nop(); }, // yield (bug in Chrome)
+        function () {
+            myself.rawOpenCloudDataString(model, parsed);
+        },
+        function () {
+            msg.destroy();
+        }
+    ]);
 };
 
 // Serialize a project and save to the browser.
@@ -881,5 +879,125 @@ NetsBloxMorph.prototype.save = function () {
     } else {
         this.saveProjectsBrowser();
     }
+};
+
+NetsBloxMorph.prototype.getURL = function (url) {
+    var request = new XMLHttpRequest(),
+        myself = this;
+    try {
+        request.open('GET', url, false);
+        request.send();
+        if (request.status === 200) {
+            return request.responseText;
+        }
+        var msg = request.responseText.indexOf('ERROR') === 0 ?
+            request.responseText : 'unable to retrieve ' + url;
+
+        throw new Error(msg);
+    } catch (err) {
+        myself.showMessage(err.message);
+        return;
+    }
+};
+
+NetsBloxMorph.prototype.logout = function () {
+    NetsBloxMorph.uber.logout.call(this);
+    this.room.update();
+};
+
+// RPC import support (both custom blocks and message types)
+NetsBloxMorph.prototype.droppedText = function (aString, name) {
+    if (aString.indexOf('<rpc') === 0) {
+        return this.openBlocksMsgTypeString(aString);
+    } else if (aString.indexOf('<room') === 0) {
+        location.hash = '';
+        return this.openRoomString(aString);
+    } else {
+        return IDE_Morph.prototype.droppedText.call(this, aString, name);
+    }
+};
+
+NetsBloxMorph.prototype.openBlocksMsgTypeString = function (aString) {
+    var msg,
+        myself = this;
+
+    this.nextSteps([
+        function () {
+            msg = myself.showMessage('Opening...');
+        },
+        function () {nop(); }, // yield (bug in Chrome)
+        function () {
+            if (Process.prototype.isCatchingErrors) {
+                try {
+                    myself.rawOpenBlocksMsgTypeString(aString);
+                } catch (err) {
+                    myself.showMessage('Load failed: ' + err);
+                }
+            } else {
+                myself.rawOpenBlocksMsgTypeString(aString);
+            }
+        },
+        function () {
+            msg.destroy();
+        }
+    ]);
+};
+
+NetsBloxMorph.prototype.rawOpenBlocksMsgTypeString = function (aString) {
+    // load messageTypes
+    var content = this.serializer.parse(aString),
+        messageTypes = content.childNamed('messageTypes'),
+        blocksStr = content.childNamed('blocks').toString(),
+        types;
+
+    if (messageTypes) {
+        types = messageTypes.children;
+        types.forEach(this.serializer.loadMessageType.bind(this, this.stage));
+    }
+
+    // load blocks
+    this.rawOpenBlocksString(blocksStr, '', true)
+};
+
+NetsBloxMorph.prototype.initializeCloud = function () {
+    var myself = this,
+        world = this.world();
+    new DialogBoxMorph(
+        null,
+        function (user) {
+            var pwh = hex_sha512(user.password),
+                str;
+            SnapCloud.login(
+                user.username,
+                pwh,
+                user.choice,
+                function () {
+                    if (user.choice) {
+                        str = SnapCloud.encodeDict(
+                            {
+                                username: user.username,
+                                password: pwh
+                            }
+                        );
+                        localStorage['-snap-user'] = str;
+                    }
+                    myself.source = 'cloud';
+                    myself.showMessage('now connected.', 2);
+                },
+                myself.cloudError()
+            );
+        }
+    ).withKey('cloudlogin').promptCredentials(
+        'Sign in',
+        'login',
+        null,
+        null,
+        null,
+        null,
+        'stay signed in on this computer\nuntil logging out',
+        world,
+        myself.cloudIcon(),
+        myself.cloudMsg
+    );
 };
 
