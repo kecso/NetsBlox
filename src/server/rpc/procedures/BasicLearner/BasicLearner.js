@@ -69,7 +69,7 @@ BasicLearnerRPC.prototype.getOptimalChoice = function (req, res) {
     if (learner) {
         res.send('' + learner.getOptimalChoice(req.query.s));
     } else {
-        res.send('0');
+        res.send('1');
     }
 };
 
