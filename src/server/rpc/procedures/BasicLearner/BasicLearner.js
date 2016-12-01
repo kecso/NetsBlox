@@ -4,6 +4,7 @@
 'use strict';
 
 var R = require('ramda'),
+    FS = require('fs'),
     debug = require('debug'),
     log = debug('NetsBlox:RPCManager:BasicLearnerRPC:log'),
     trace = debug('NetsBlox:RPCManager:BasicLearnerRPC:trace'),
@@ -20,6 +21,7 @@ var R = require('ramda'),
  */
 var BasicLearnerRPC = function () {
     this._learners = {};
+    this._statistics = {};
 };
 
 /**
@@ -43,7 +45,9 @@ BasicLearnerRPC.getActions = function () {
         'reportGood',
         'reportBad',
         'updateLearner',
-        'finishGame'];
+        'finishGame',
+        'reportValue',
+        'saveStatistics'];
 };
 
 // Actions
@@ -60,6 +64,7 @@ BasicLearnerRPC.prototype.getLearner = function (req, res) {
     this._learners[userId] = new Learner();
     this._learners[userId].init(actions);
     this._learners[userId].load(req.query.name || 'basic');
+    this._statistics[userId] = [];
     res.send(true);
 };
 
@@ -112,6 +117,32 @@ BasicLearnerRPC.prototype.updateLearner = function (req, res) {
 BasicLearnerRPC.prototype.finishGame = function (req, res) {
     this._learners = {};
     res.send(true);
+};
+
+BasicLearnerRPC.prototype.reportValue = function (req,res) {
+    var classId = req.query.uId+(req.query.a || "");
+    this._statistics[classId] = this._statistics[classId] || [];
+    this._statistics[classId].push(Number(req.query.v));
+    res.send(true);
+};
+
+BasicLearnerRPC.prototype.saveStatistics = function (req,res) {
+    var statistics = this._statistics,
+        outFileContent = "",
+        id,i;
+
+    console.log('saving statistics');
+    this._statistics = {};
+    for(id in statistics){
+        console.log('id: ',id);
+        outFileContent+='"'+id+'",';
+        for(i=0;i<statistics[id].length;i+=1){
+            outFileContent+=statistics[id][i]+',';
+        }
+        outFileContent+='\n';
+    }
+
+    FS.appendFileSync('statistics.csv',outFileContent,'utf8');
 };
 
 module.exports = BasicLearnerRPC;
